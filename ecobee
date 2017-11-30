@@ -1,0 +1,616 @@
+#!/usr/bin/python
+#  This code interacts with the Ecobee API to control a thermostat
+#
+#  Copyright (C) Ronan Brunner 2017
+#
+#  This program is free software: you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation, either version 3 of the License, or
+#  (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+#  You should have received a copy of the GNU General Public License
+#  along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+
+from __future__ import print_function
+import requests
+import pycurl
+import sys, getopt, os
+import argparse
+from StringIO import StringIO    
+import json
+import pprint, time, datetime
+import math
+from os.path import expanduser
+##########################################################################################################
+homeDir = expanduser("~")
+configFile = homeDir + '/.ecobee.conf'
+verbose=False
+##########################################################################################################
+ecobeeURL='https://api.ecobee.com/'
+##########################################################################################################
+def eprint(*args, **kwargs):
+    print(*args, file=sys.stderr, **kwargs)
+
+##########################################################################################################
+##########################################################################################################
+def putConfig(config):
+    try:
+        with open(configFile, 'w') as fdesc:
+            fdesc.write(json.dumps(config))
+            if verbose:
+                print("Wrote config " + configFile)
+    except IOError as error:
+        errno, errstr = error
+        eprint('An error occurred: ', errstr)
+        eprint('Error: Unable to write config file ', configFile)
+        sys.exit(1)
+
+def getConfig():
+    config = {}
+    if os.path.isfile(configFile):
+        try:
+            with open(configFile, 'r') as fdesc:
+                config = json.loads(fdesc.read())
+                if verbose:
+                    print("Loaded config " + configFile)
+        except IOError as error:
+            errno, errstr = error
+            eprint('An error occurred: ', errstr)
+            eprint('Error: Unable to read config file ', configFile)
+            sys.exit(1)
+    return config
+
+
+##########################################################################################################
+##########################################################################################################
+ecobeeWindowEffToRValue = [ 0.0, 0.8, 0.96, 1.65, 2.01, 2.5, 1.14, 1.37 ]
+
+##########################################################################################################
+def forceastDateToHour(dateString):
+    nowDatetime          = datetime.datetime.now()
+    forecastDatetime     = datetime.datetime.strptime(dateString, '%Y-%m-%d %H:%M:%S')
+    datetimeDiff         = forecastDatetime - nowDatetime
+    return (datetimeDiff.total_seconds()/(60.0*60.0))
+
+##########################################################################################################
+#From http://www.lenntech.com/calculators/humidity/relative-humidity.htm
+def relativeHumidityConvert(tempOutside, relativeHumidityOutside, tempInside):
+    moisture_g_per_kg = (relativeHumidityOutside * 0.42 * math.exp(tempOutside * 10 * 0.006235398) / 10);
+    return (moisture_g_per_kg * 10/(0.42 * math.exp(tempInside * 10 * 0.006235398)))
+
+##########################################################################################################
+##########################################################################################################
+class EcobeeServer(object):
+    def __init__(self):
+        self.thermostats        = list()
+        self.api_key            = ''
+        self.authorization_code = ''
+        self.access_token       = ''
+        self.refresh_token      = ''
+
+        self.loadConfig()
+        
+        if self.api_key == '':
+            self.getAPIKey()
+            
+        if self.authorization_code == '':
+            self.getAuthorizationCode()
+            
+        if self.access_token == '':
+            self.getAccessToken()
+
+        self.getThermostats()
+        
+    def loadConfig(self):
+        config = getConfig()
+        if 'API_KEY' in config:
+            self.api_key = config['API_KEY']
+        if 'AUTHORIZATION_CODE' in config:
+            self.authorization_code = config['AUTHORIZATION_CODE']
+        if 'ACCESS_TOKEN' in config:
+            self.access_token = config['ACCESS_TOKEN']
+        if 'REFRESH_TOKEN' in config:
+            self.refresh_token = config['REFRESH_TOKEN']
+        
+    def storeConfig(self):
+        config = {}
+        config['API_KEY']            = self.api_key
+        config['AUTHORIZATION_CODE'] = self.authorization_code
+        config['ACCESS_TOKEN']       = self.access_token
+        config['REFRESH_TOKEN']      = self.refresh_token
+        putConfig(config)
+        
+    def dumpAll(self):
+        pprint.pprint(self.thermostats)
+        print('api:           ' + self.api_key)
+        print('authorization: ' + self.authorization_code)
+        print('access:        ' + self.access_token)
+        print('refresh_token: ' + self.refresh_token)
+
+    def postEcobee(self, url, parameters, use_access_token = False, body = None):
+        header = None
+        if use_access_token:
+            header = {'Content-Type' : 'application/json;charset=UTF-8',
+                      'Authorization': 'Bearer ' + self.access_token}
+        bodyJSON = None
+        if body != None:
+            if verbose:
+                pprint.pprint(body)
+            bodyJSON = json.dumps(body)
+        if verbose:
+            print('url:' + url)
+            print('header:' + str(header))
+            print('parameters:' + str(parameters))
+            print('body:' + bodyJSON if bodyJSON != None else 'N/A')
+        request = requests.post(ecobeeURL + url, headers=header, params=parameters, data=bodyJSON)
+        returnData=request.json()
+        if request.status_code == requests.codes.ok:
+            if verbose:
+                pprint.pprint(returnData)
+            return returnData
+        else:
+            eprint('Error while posting to ecobee.com. Status code: ' + str(request.status_code))
+            eprint('URL:' + ecobeeURL + url + ' parameters:' + str(parameters))
+            pprint.pprint(returnData)
+            sys.exit(1)
+            
+    def getEcobee(self, url, parameters, use_access_token = False, retry = True):
+        header = None
+        if use_access_token:
+            header = {'Content-Type' : 'application/json;charset=UTF-8',
+                      'Authorization': 'Bearer ' + self.access_token}
+        request = requests.get(ecobeeURL + url, headers=header, params=parameters)
+        returnData=request.json()
+        if request.status_code == requests.codes.ok:
+            returnData=request.json()
+            if verbose:
+                pprint.pprint(returnData)
+            return returnData
+        else:
+            if retry:
+                if verbose:
+                    print('Refreshing tokens...')
+                self.refreshTokens()
+                return(self.getEcobee(url, parameters, use_access_token, False))
+            else:
+                eprint('Error while getting from ecobee.com. Status code: ' + str(request.status_code))
+                eprint('URL:' + ecobeeURL + url + ' parameters:' + str(parameters))
+                pprint.pprint(returnData)
+                sys.exit(1)
+                
+    def getAPIKey(self):
+        self.storeConfig()
+        eprint('Error: Unable to get API Key.')
+        eprint('The API Key can be obtained following the instructions at https://www.ecobee.com/home/developer/api/examples/ex1.shtml\n\n' +
+               'If you are reauthenticating, go to your ecobee thermostat web page, select the top right menu, and click developer. The API key will be there with the associated name you gave this script.')
+        api_key = raw_input("Enter the API key:")
+        if api_key != '':
+            self.api_key = api_key
+            self.storeConfig()
+            
+        sys.exit(1)
+        
+    def getAuthorizationCode(self):
+        returnData = self.getEcobee('authorize', {'response_type': 'ecobeePin',
+                                                  'client_id'    :  self.api_key,
+                                                  'scope'        : 'smartWrite'})
+        self.authorization_code = returnData['code']
+        self.storeConfig()
+        print('Please authorize your ecobee developer app with PIN code: ' + returnData['ecobeePin'] +
+              '\nGoto https://www.ecobee.com/consumerportal/index.html, click\nMy Apps, Add application, Enter Pin and click Authorize.\n')
+
+    def getAccessToken(self):
+        returnData = self.postEcobee('token', {'grant_type': 'ecobeePin',
+                                               'code'      :  self.authorization_code,
+                                               'client_id' :  self.api_key})
+        self.access_token  = returnData['access_token']
+        self.refresh_token = returnData['refresh_token']
+        self.storeConfig()
+
+    def refreshTokens(self):
+        returnData = self.postEcobee('token', {'grant_type'   : 'refresh_token',
+                                               'refresh_token':  self.refresh_token,
+                                               'client_id'    :  self.api_key})
+        self.access_token  = returnData['access_token']
+        self.refresh_token = returnData['refresh_token']
+        self.storeConfig()
+
+    def getThermostats(self):
+        cmdSelection                                =  {}
+        cmdSelection['selectionType']               = 'registered'
+        cmdSelection['selectionMatch']              = ''
+        
+       #https://www.ecobee.com/home/developer/api/documentation/v1/objects/Selection.shtml
+        cmdSelection['includeRuntime']              = True
+        cmdSelection['includeExtendedRuntime']      = True
+        cmdSelection['includeElectricity']          = True #N/R
+        cmdSelection['includeSettings']             = True
+        cmdSelection['includeLocation']             = True #N/R
+        cmdSelection['includeProgram']              = True
+        cmdSelection['includeEvents']               = True
+        cmdSelection['includeDevice']               = True #N/R
+        cmdSelection['includeTechnician']           = True #N/R
+        cmdSelection['includeUtility']              = True #N/R
+        cmdSelection['includeManagement']           = True #N/R
+        cmdSelection['includeAlerts']               = True #N/R
+        cmdSelection['includeReminders']            = True #N/R
+        cmdSelection['includeWeather']              = True
+        cmdSelection['includeHouseDetails']         = True
+        cmdSelection['includeOemCfg']               = True #N/R
+        cmdSelection['includeEquipmentStatus']      = True
+        cmdSelection['includeNotificationSettings'] = True #N/R
+        cmdSelection['includePrivacy']              = True #N/R
+        cmdSelection['includeVersion']              = True #N/R
+        #cmdSelection['includeSecuritySettings']     = True #N/R
+        cmdSelection['includeSensors']              = True
+        
+        cmd                                         =  {}
+        cmd['selection']                            =  cmdSelection
+        
+        cmdJSON    = json.dumps(cmd)
+        returnData = self.getEcobee('1/thermostat',
+                                    {'json': cmdJSON},
+                                    True)
+        self.thermostats = returnData['thermostatList']
+
+    def getThermostatDefaultName(self):
+        return self.thermostats[0]['name']
+        
+    def getThermostat(self, thermoName):
+        for thermo in self.thermostats:
+            if thermo['name'] == thermoName:
+                return thermo
+        return None
+
+    def dumpThermoNames(self):
+        print('Thermostat names:')
+        for thermo in self.thermostats:
+            print('  ' + thermo['name'])
+    
+##########################################################################################################
+##########################################################################################################
+class EcobeeThermostat(object):
+    def __init__(self,server,thermoName,useCelcius):
+        self.ecobeeServer   = server
+        self.useCelcius     = useCelcius
+        if thermoName != None:
+            self.thermoName = thermoName
+        else:
+            self.thermoName = self.ecobeeServer.getThermostatDefaultName()
+        if self.getThermostat() == None:
+            eprint('Cannot find thermostat ' + self.thermoName)
+            self.ecobeeServer.dumpThermoNames()
+            sys.exit(1)
+            
+    def tempToFahrOrCelc(self,temp):
+        if self.useCelcius:
+            return ((temp - 320.0) * 5.0 / 90.0)
+        else:
+            return (temp/10.0)
+
+    def tempToCelc(self,temp):
+        return ((temp - 320.0) * 5.0 / 90.0)
+
+    def fahrOrCelcToTemp(self,value):
+        if self.useCelcius:
+            return int(((value * 90.0) / 5.0) + 320.0)
+        else:
+            return int(value * 10.0)
+
+    def tempType(self):
+        return 'C' if self.useCelcius else 'F'
+        
+    def getThermostat(self):
+        return self.ecobeeServer.getThermostat(self.thermoName)
+        
+    def getThermostatID(self):
+        thermo = self.getThermostat()
+        if thermo != None:
+            return thermo['identifier']
+        return 0
+        
+    def getCurrentClimateRef(self):
+        thermo = self.getThermostat()
+        if thermo != None:
+            return thermo['program']['currentClimateRef']
+        return ''
+
+    def getCurrentClimateProgram(self):
+        currentClimateRef = self.getCurrentClimateRef()
+        if currentClimateRef != '':
+            thermo        = self.getThermostat()
+            for climates in thermo['program']['climates']:
+                if climates['climateRef'] == currentClimateRef:
+                    return climates
+        return None
+
+    def getSensorSpreadTemp(self):
+        thermostat = self.getThermostat()
+        thermoTempMain   = 0
+        thermoTempRemote = list()
+        for sensor in thermostat['remoteSensors']:
+            for sensorCapability in sensor['capability']:
+                if sensorCapability['type'] == 'temperature':
+                    if sensor['type'] == 'thermostat':
+                        thermoTempMain = self.tempToFahrOrCelc(int(sensorCapability['value']))
+                    else:
+                        thermoTempRemote.append(self.tempToFahrOrCelc(int(sensorCapability['value'])))
+        if verbose:
+            print('Main temp=' + str(thermoTempMain) + ' sensors=' + str(thermoTempRemote))
+        if len(thermoTempRemote) == 0:
+            if verbose:
+                print('No remote sensors found')
+            return 0
+        accumulatedTempDiff = 0
+        for sensor in thermoTempRemote:
+            accumulatedTempDiff = (accumulatedTempDiff + abs(sensor - thermoTempMain))
+        averageDiff = accumulatedTempDiff / len(thermoTempRemote)
+        if verbose:
+            print('Average spread temp is =' + str(averageDiff))
+        return averageDiff
+    
+    def dumpAll(self):
+        self.ecobeeServer.dumpAll()
+
+    def getStatus(self):
+        print('Thermostat name:            ' + self.thermoName)
+        print('  ID:                       ' + self.getThermostatID())
+        print('  Current climate ref:      ' + self.getCurrentClimateRef())
+        thermostat = self.getThermostat()
+        heat = thermostat['settings']['hvacMode'] == 'heat'
+        print('  Equipment running:        ' +     thermostat['equipmentStatus'])
+        updatetime = datetime.datetime.strptime(thermostat['runtime']['lastStatusModified'], '%Y-%m-%d %H:%M:%S')
+        print('  Update time:              ' +     thermostat['runtime']['lastStatusModified'])
+        print('  Update time:              ' +     str(updatetime))
+        print('  Temperature actual:       %.2f %s' % (self.tempToFahrOrCelc(thermostat['runtime']['actualTemperature']), self.tempType()))
+        setTemp = thermostat['runtime']['desiredHeat'] if heat else thermostat['runtime']['desiredCool']
+        print('  Temperature set:          %.2f %s' % (self.tempToFahrOrCelc(setTemp), self.tempType()))
+        print('  Fan:                      ' +     thermostat['runtime']['desiredFanMode'])
+        print('  Humidity:                 ' + str(thermostat['runtime']['actualHumidity']) + ' %')
+        adjustedRH = relativeHumidityConvert(self.tempToCelc(thermostat['runtime']['actualTemperature']),thermostat['runtime']['actualHumidity'],self.tempToCelc(setTemp))
+        print('  Humidity adjusted:        ' + str(int(adjustedRH)) + ' %')
+        if thermostat['settings']['hasHumidifier']:
+            print('    Mode:                   ' + thermostat['settings']['humidifierMode'])
+            if thermostat['settings']['humidifierMode'] == 'auto':
+                print('      Setpoint (auto):      ' + str(thermostat['extendedRuntime']['desiredHumidity'][0]) + ' %')
+                print('      Window Efficiency:    ' + str(thermostat['houseDetails']['windowEfficiency']) + ' / R-Value: ' + str(ecobeeWindowEffToRValue[thermostat['houseDetails']['windowEfficiency']]))
+            else:
+                print('      Setpoint (set):       ' + thermostat['settings']['humidity'] + ' %')
+        print('  Sensor spread             %.2f %s' % (self.getSensorSpreadTemp(), self.tempType()))
+        print('  HVAC mode:                ' +     thermostat['settings']['hvacMode'])
+        print('  Follow me:                ' + str(thermostat['settings']['followMeComfort']))
+        for sensor in thermostat['remoteSensors']:
+            print('  Sensor: ' + sensor['name'] + '(' + ('In Use' if sensor['inUse'] else 'Not Used') + ')')
+            for sensorCapability in sensor['capability']:
+                if sensorCapability['type'] == 'temperature':
+                    print('    Temperature:            %.2f %s' % (self.tempToFahrOrCelc(int(sensorCapability['value'])), self.tempType()))
+                if sensorCapability['type'] == 'occupancy':
+                    print('    Occupied:               ' + str(sensorCapability['value']))
+                if sensorCapability['type'] == 'humidity':
+                    print('    Humidity:               ' + str(sensorCapability['value']))
+        if (thermostat['settings']['heatStages'] == 2):
+            print('  Heat 2-stage differential:%.2f %s' % ((self.tempToFahrOrCelc(thermostat['settings']['stage1HeatingDifferentialTemp']) - self.tempToFahrOrCelc(0)) * 10, self.tempType()))
+        if (thermostat['settings']['coolStages'] == 2):
+            print('  Cool 2-stage differential:%.2f %s' % ((self.tempToFahrOrCelc(thermostat['settings']['stage1CoolingDifferentialTemp']) - self.tempToFahrOrCelc(0)) * 10, self.tempType()))
+        for event in thermostat['events']:
+            if (event['type'] != 'template'):
+                print('  Event:                    ' + event['type'])
+                print('    Running:                ' + str(event['running']))
+                print('    Fan:                    ' + event['fan'])
+                if event['isTemperatureAbsolute'] or event['isTemperatureRelative']:
+                    print('    Temperature (hold):     %.2f %s' % (self.tempToFahrOrCelc(event['heatHoldTemp'] if heat else event['coolHoldTemp']), self.tempType()))
+                print('    Start:                  ' + event['startDate'] + ' ' + event['startTime'])
+                print('    End:                    ' + event['endDate']   + ' ' + event['endTime'])
+        #From http://www.myforecast.com/bin/detailed_forecast.m?city=54182&metric=false
+        if 'weather' in thermostat:
+            print('  Forecasts:             ETA(Hours)    Temp/Hum/AdjHum    High/   Low')
+            for forecast in thermostat['weather']['forecasts']:
+                display = '    ' + forecast['dateTime'] + '   '
+                display = display + ('%5.1f' % forceastDateToHour(forecast['dateTime'])) + '      '
+                adjustedRH = relativeHumidityConvert(self.tempToCelc(forecast['temperature']),forecast['relativeHumidity'],self.tempToCelc(setTemp))
+                display = display + ('%6.2f' % self.tempToFahrOrCelc(forecast['temperature'])) + '/' + ('%3u' % forecast['relativeHumidity']) + '/' + ('%3u    ' % int(adjustedRH))
+                if forecast['tempHigh'] > -4000:
+                    display = display + '/' + ('%6.2f' % self.tempToFahrOrCelc(forecast['tempHigh']))
+                if forecast['tempLow'] > -4000:
+                    display = display + '/' + ('%6.2f' % self.tempToFahrOrCelc(forecast['tempLow']))
+                print(display)
+        
+    def postThermostatField(self,field, command):
+        cmdSelection                      =  {}
+        cmdSelection['selectionType']     = 'thermostats'
+        cmdSelection['selectionMatch']    =  self.getThermostatID()
+        
+        cmd                               =  {}
+        cmd[field]                        =  command
+        cmd['selection']                  =  cmdSelection
+        self.ecobeeServer.postEcobee('1/thermostat',
+                                     {'format': 'json'},
+                                     True,
+                                     cmd)
+    def setFanHold(self):
+        cmdFunctionParams                 =  {}
+        cmdFunctionParams['holdType']     = 'nextTransition'
+        cmdFunctionParams['heatHoldTemp'] =  0
+        cmdFunctionParams['coolHoldTemp'] =  0
+#        cmdFunctionParams['holdClimateRef'] = 'home'
+        cmdFunctionParams['fan']          = 'on'
+        cmdFunctionParams['isTemperatureAbsolute'] = False
+        cmdFunctionParams['isTemperatureRelative'] = False
+
+        cmdFunctions                      =  {}
+        cmdFunctions['type']              = 'setHold'
+        cmdFunctions['params']            =  cmdFunctionParams
+
+        self.postThermostatField('functions',[cmdFunctions])
+
+    def setTempHold(self,temp,fanOn=False):
+        cmdFunctionParams                 =  {}
+        cmdFunctionParams['holdType']     = 'nextTransition'
+        cmdFunctionParams['heatHoldTemp'] =  self.fahrOrCelcToTemp(temp)
+        cmdFunctionParams['coolHoldTemp'] =  cmdFunctionParams['heatHoldTemp']
+        if fanOn:
+            cmdFunctionParams['fan']      = 'on'
+
+        cmdFunctions                      =  {}
+        cmdFunctions['type']              = 'setHold'
+        cmdFunctions['params']            =  cmdFunctionParams
+
+        self.postThermostatField('functions',[cmdFunctions])
+
+    def clearHold(self):
+        cmdFunctionParams                 =  {}
+        cmdFunctionParams['resumeAll']    =  False
+
+        cmdFunctions                      =  {}
+        cmdFunctions['type']              = 'resumeProgram'
+        cmdFunctions['params']            =  cmdFunctionParams
+
+        self.postThermostatField('functions',[cmdFunctions])
+
+    def fanControlOnSpreadThreshold(self, threshold):
+        if self.getSensorSpreadTemp() > threshold:
+            print('Turn fan ON')
+            #setFanHold()
+        else:
+            print('Turn fan OFF')
+            #clearHold()
+
+    def setThermostatSetting(self,field,value):
+        cmdSettings                       =  {}
+        cmdSettings[field]                =  value;
+        
+        cmdThermostat                     =  {}
+        cmdThermostat['settings']         =  cmdSettings;
+
+        self.postThermostatField('thermostat',cmdThermostat)
+
+    #0-100
+    def setHumidityLevel(self,humidityLevel):
+        self.setThermostatSetting('humidity',humidityLevel)
+
+    #auto, manual, off (condensationAvoid is deprecated)
+    def setHumidifierMode(self, humidifierMode):
+        self.setThermostatSetting('humidifierMode',humidifierMode)
+
+    #auto, auxHeatOnly, cool, heat, off.
+    def setHVACMode(self, hvacMode):
+        self.setThermostatSetting('hvacMode',hvacMode)
+
+    def setstage1HeatingDifferentialTemp(self, stage1HeatingDifferentialTemp):
+        self.setThermostatSetting('stage1HeatingDifferentialTemp',stage1HeatingDifferentialTemp)
+
+##########################################################################################################
+##########################################################################################################
+parser       = argparse.ArgumentParser(description='Interface to Ecobee thermostat.')
+
+parser.add_argument('--verbose', '-v', dest='verbose', action='store_const',
+                   default=0, const=1,
+                   help='Verbose')
+
+parser.add_argument('--temperature', '-t', dest='temperatureHold', action='store',
+                   default=0.0, type=float,
+                   help='Set a temperature hold.')
+
+parser.add_argument('--fan', '-f', dest='fanHold', action='store_const',
+                   default=0, const=1,
+                   help='Set fan hold')
+
+parser.add_argument('--auto', '-a', dest='autoThreshold', action='store',
+                   default=0.0, type=float,
+                   help='Set a temperature differential between the sensors to automically turn on or off the fan.')
+
+parser.add_argument('--humidity', '-hum', dest='humidityLevel', action='store',
+                   default=-1, type=int,
+                   help='Set the desired relative humidity level in percent.')
+
+parser.add_argument('--humidifier-mode', '-hm', dest='humidifierMode', action='store',
+                    default=None, type=str, #nargs=1,
+                    help='Humidifier mode (auto,off,manual)')
+
+parser.add_argument('--stage1HeatingDifferentialTemp', dest='stage1HeatingDifferentialTemp', action='store',
+                    default=None, type=int,
+                    help='stage1HeatingDifferentialTemp')
+
+parser.add_argument('--fahrenheit', '-fah', dest='useFahrenheit', action='store_const',
+                   default=0, const=1,
+                   help='Use Fahrenheit instead of Celcius for temperatures')
+
+parser.add_argument('--clear', '-c', dest='clearHold', action='store_const',
+                   default=0, const=1,
+                   help='Clear all holds')
+
+parser.add_argument('--name', '-n', dest='name', type=str, action='store',
+                   default=None,
+                   help='Thermostat name. Default will be the first one found - which is OK if you only have one thermostat.')
+
+parser.add_argument('--status', '-s', dest='status', action='store_const',
+                   default=0, const=1,
+                   help='Get the status')
+
+parser.add_argument('--dump', '-d', dest='dump', action='store_const',
+                   default=0, const=1,
+                   help='Dump everything') 
+
+args         = parser.parse_args()
+##########################################################################################################
+verbose      = args.verbose
+ecobeeServer = EcobeeServer()
+ecobee       = EcobeeThermostat(ecobeeServer,args.name,not args.useFahrenheit)
+
+if args.status:
+    ecobee.getStatus()
+    sys.exit(0)
+
+if args.dump:
+    ecobee.dumpAll()
+    sys.exit(0)
+
+commandRun = False
+if args.fanHold:
+    commandRun = True
+    args.clearHold = True
+    
+if args.temperatureHold != 0.0:
+    commandRun = True
+    args.clearHold = True
+    
+if args.clearHold:
+    commandRun = True
+    ecobee.clearHold()
+
+if args.temperatureHold != 0.0:
+    commandRun = True
+    ecobee.setTempHold(args.temperatureHold,args.fanHold)
+    args.fanHold = False
+
+if args.stage1HeatingDifferentialTemp != None:
+    commandRun = True
+    ecobee.setstage1HeatingDifferentialTemp(args.stage1HeatingDifferentialTemp)
+    
+if args.fanHold:
+    commandRun = True
+    ecobee.setFanHold()
+
+if args.autoThreshold:
+    commandRun = True
+    ecobee.fanControlOnSpreadThreshold(args.autoThreshold)
+
+if 0 <= args.humidityLevel <= 100:
+    commandRun = True
+    ecobee.setHumidityLevel(args.humidityLevel)
+
+if args.humidifierMode:
+    commandRun = True
+    ecobee.setHumidifierMode(args.humidifierMode)
+
+if commandRun == False:
+    ecobee.getStatus()
+
+sys.exit(0)
+##########################################################################################################

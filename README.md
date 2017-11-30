@@ -1,7 +1,7 @@
 # ecobee
 A command line tool to control a Ecobee thermostat
 
-This code was based off of an existing project, that I sadly, can't remember.
+This code was based off of an existing project that, I sadly, can't recall.
 
 The code can be run on a command line or automated to be called from a crontab.
 
@@ -50,7 +50,7 @@ The status output is shown as below - which includes the weather forecast:
         2017-11-30 12:00:00    14.0        3.39/ 76/ 28    
         2017-11-30 18:00:00    20.0        3.39/ 91/ 34    
 
-And here is the help API
+Here is the help API
 
     >ecobee --help
     usage: ecobee [-h] [--verbose] [--temperature TEMPERATUREHOLD] [--fan]
