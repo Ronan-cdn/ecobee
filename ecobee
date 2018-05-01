@@ -45,6 +45,7 @@ def putConfig(config):
             fdesc.write(json.dumps(config))
             if verbose:
                 print("Wrote config " + configFile)
+            fdesc.close()
     except IOError as error:
         errno, errstr = error
         eprint('An error occurred: ', errstr)
@@ -59,6 +60,7 @@ def getConfig():
                 config = json.loads(fdesc.read())
                 if verbose:
                     print("Loaded config " + configFile)
+                fdesc.close()
         except IOError as error:
             errno, errstr = error
             eprint('An error occurred: ', errstr)
@@ -336,7 +338,7 @@ class EcobeeThermostat(object):
         thermoTempRemote = list()
         for sensor in thermostat['remoteSensors']:
             for sensorCapability in sensor['capability']:
-                if sensorCapability['type'] == 'temperature':
+                if sensorCapability['type'] == 'temperature' and sensorCapability['value'] != 'unknown':
                     if sensor['type'] == 'thermostat':
                         thermoTempMain = self.tempToFahrOrCelc(int(sensorCapability['value']))
                     else:
@@ -388,7 +390,7 @@ class EcobeeThermostat(object):
         for sensor in thermostat['remoteSensors']:
             print('  Sensor: ' + sensor['name'] + '(' + ('In Use' if sensor['inUse'] else 'Not Used') + ')')
             for sensorCapability in sensor['capability']:
-                if sensorCapability['type'] == 'temperature':
+                if sensorCapability['type'] == 'temperature' and sensorCapability['value'] != 'unknown':
                     print('    Temperature:            %.2f %s' % (self.tempToFahrOrCelc(int(sensorCapability['value'])), self.tempType()))
                 if sensorCapability['type'] == 'occupancy':
                     print('    Occupied:               ' + str(sensorCapability['value']))
