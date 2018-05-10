@@ -305,6 +305,15 @@ class EcobeeThermostat(object):
         else:
             return int(value * 10.0)
 
+    def speedToMilesKilometers(self,value):
+        if value == -5002:
+            return 0
+        if self.useCelcius:
+            return ((value * 1.60934)/1000.0)
+        else:
+            return ((value)/1000.0)
+
+
     def tempType(self):
         return 'C' if self.useCelcius else 'F'
         
@@ -411,14 +420,17 @@ class EcobeeThermostat(object):
                 print('    End:                    ' + event['endDate']   + ' ' + event['endTime'])
         #From http://www.myforecast.com/bin/detailed_forecast.m?city=54182&metric=false
         if 'weather' in thermostat:
-            print('  Forecasts:             ETA(Hours)    Temp/Hum/AdjHum    High/   Low')
+            print('  Forecasts:             ETA(Hours)    Temp/Hum/AdjHum    Wind/Gusts    High/  Low')
             for forecast in thermostat['weather']['forecasts']:
                 display = '    ' + forecast['dateTime'] + '   '
                 display = display + ('%5.1f' % forceastDateToHour(forecast['dateTime'])) + '      '
                 adjustedRH = relativeHumidityConvert(self.tempToCelc(forecast['temperature']),forecast['relativeHumidity'],self.tempToCelc(setTemp))
                 display = display + ('%6.2f' % self.tempToFahrOrCelc(forecast['temperature'])) + '/' + ('%3u' % forecast['relativeHumidity']) + '/' + ('%3u    ' % int(adjustedRH))
+                #display = display + '   ' + ('%04.1f/%4.1f' % (self.speedToMilesKilometers(forecast['windSpeed']),self.speedToMilesKilometers(forecast['windGust'])))
+                display = display + '   ' + ('%4.1f' % self.speedToMilesKilometers(forecast['windSpeed']))
+                display = display + '/'   + ('%4.1f' % self.speedToMilesKilometers(forecast['windGust']))
                 if forecast['tempHigh'] > -4000:
-                    display = display + '/' + ('%6.2f' % self.tempToFahrOrCelc(forecast['tempHigh']))
+                    display = display + '   ' + ('%6.2f' % self.tempToFahrOrCelc(forecast['tempHigh']))
                 if forecast['tempLow'] > -4000:
                     display = display + '/' + ('%6.2f' % self.tempToFahrOrCelc(forecast['tempLow']))
                 print(display)
