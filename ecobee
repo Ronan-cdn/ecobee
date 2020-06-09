@@ -1,7 +1,7 @@
 #!/usr/bin/python
 #  This code interacts with the Ecobee API to control a thermostat
 #
-#  Copyright (C) Ronan Brunner 2017
+#  Copyright (C) Ronan Brunner 2020
 #
 #  This program is free software: you can redistribute it and/or modify
 #  it under the terms of the GNU General Public License as published by
@@ -16,17 +16,14 @@
 #  You should have received a copy of the GNU General Public License
 #  along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-
 from __future__ import print_function
-import requests
-import pycurl
-import sys, getopt, os
-import argparse
-from StringIO import StringIO    
-import json
-import pprint, time, datetime
-import math
+import sys, os
 from os.path import expanduser
+import requests
+import argparse
+import json
+import pprint, datetime
+import math
 ##########################################################################################################
 homeDir = expanduser("~")
 configFile = homeDir + '/.ecobee.conf'
@@ -158,6 +155,7 @@ class EcobeeServer(object):
             return returnData
         else:
             eprint('Error while posting to ecobee.com. Status code: ' + str(request.status_code))
+            eprint('You can try deleting your API tokens and grab a new API key. You can do this by deleting file ' + configFile)
             eprint('URL:' + ecobeeURL + url + ' parameters:' + str(parameters))
             pprint.pprint(returnData)
             sys.exit(1)
@@ -188,24 +186,30 @@ class EcobeeServer(object):
                 
     def getAPIKey(self):
         self.storeConfig()
-        eprint('Error: Unable to get API Key.')
-        eprint('The API Key can be obtained following the instructions at https://www.ecobee.com/home/developer/api/examples/ex1.shtml\n\n' +
-               'If you are reauthenticating, go to your ecobee thermostat web page, select the top right menu, and click developer. The API key will be there with the associated name you gave this script.')
-        api_key = raw_input("Enter the API key:")
+        eprint('Error: Unable to get API Key.\n')
+        eprint('The API Key can be obtained following the instructions at https://www.ecobee.com/home/developer/api/examples/ex1.shtml\n' +
+               'If you are reauthenticating, go to your ecobee thermostat web page, select the top right menu, and click developer. The API key will be there with the associated name you gave this script.\n')
+        api_key = ''
+        if sys.version_info[0] > 2:
+            api_key = input("Enter the API key:")
+        else:
+            api_key = raw_input("Enter the API key:")
         if api_key != '':
             self.api_key = api_key
             self.storeConfig()
-            
+            self.getAuthorizationCode()
         sys.exit(1)
         
     def getAuthorizationCode(self):
+        eprint('\nConnecting to process PIN:\n')
         returnData = self.getEcobee('authorize', {'response_type': 'ecobeePin',
                                                   'client_id'    :  self.api_key,
                                                   'scope'        : 'smartWrite'})
         self.authorization_code = returnData['code']
         self.storeConfig()
         print('Please authorize your ecobee developer app with PIN code: ' + returnData['ecobeePin'] +
-              '\nGoto https://www.ecobee.com/consumerportal/index.html, click\nMy Apps, Add application, Enter Pin and click Authorize.\n')
+              '\nGoto https://www.ecobee.com/consumerportal/index.html, click\nMy Apps, Add application, Enter Pin, click Validate and then Add Application.\n')
+        sys.exit(1)
 
     def getAccessToken(self):
         returnData = self.postEcobee('token', {'grant_type': 'ecobeePin',
