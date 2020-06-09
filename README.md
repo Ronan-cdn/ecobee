@@ -82,3 +82,29 @@ Here is the help API
                             which is OK if you only have one thermostat.
       --status, -s          Get the status
       --dump, -d            Dump everything
+
+
+You can also use the ecobee script to poll sensor data and update a MQTT broker. You can then use something like MQTT Dash on android or other clients to get the status or trigger events.
+Here is a sample shell script to do that
+
+    #!/bin/sh
+    
+    data=/tmp/ecobeee.mqtt.$$
+    ecobee > $data
+    
+    upstairs=$(cat $data | grep -a1 "Sensor: Upstairs" | grep Temperature | cut -d: -f2 | sed 's/ *//g;s/C//')
+    main=$(cat $data | grep -a1 "Sensor: Home" | grep Temperature | cut -d: -f2 | sed 's/ *//g;s/C//')
+    house=$(cat $data | grep "Temperature actual" | cut -d: -f2  | sed 's/ *//g;s/C//')
+    humidity=$(cat $data | grep -m 1 "Humidity:" | cut -d: -f2  | sed 's/ *//g;s/%//')
+    outside_temp=$(cat $data | grep -a1 "Forecasts:"|awk "NR==3{print}" | sed 's/  */ /g' | cut -d' ' -f5 | sed 's/\///g')
+    outside_hum=$(cat $data | grep -a1 "Forecasts:"|awk "NR==3{print}" | sed 's/  */ /g' | cut -d' ' -f6 | sed 's/\///g')
+    
+    mosquitto_pub -r -t /home/climate/temp/upstairs    -m $upstairs
+    mosquitto_pub -r -t /home/climate/temp/main        -m $main
+    mosquitto_pub -r -t /home/climate/temp/house       -m $house
+    mosquitto_pub -r -t /home/climate/temp/outside     -m $outside_temp
+    mosquitto_pub -r -t /home/climate/humidity/house   -m $humidity
+    mosquitto_pub -r -t /home/climate/humidity/outside -m $outside_hum
+    
+    rm -f $data
+
