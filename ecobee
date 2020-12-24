@@ -155,7 +155,7 @@ class EcobeeServer(object):
             return returnData
         else:
             eprint('Error while posting to ecobee.com. Status code: ' + str(request.status_code))
-            eprint('You can try deleting your API tokens and grab a new API key. You can do this by deleting file ' + configFile)
+            eprint('This may be due to an API change. You can try deleting your API tokens and grab a new API key. You can do this by deleting file ' + configFile)
             eprint('URL:' + ecobeeURL + url + ' parameters:' + str(parameters))
             pprint.pprint(returnData)
             sys.exit(1)
@@ -187,7 +187,7 @@ class EcobeeServer(object):
     def getAPIKey(self):
         self.storeConfig()
         eprint('Error: Unable to get API Key.\n')
-        eprint("Go to https://www.ecobee.com/consumerportal/index.html log in, then click on the 'Developer' tab located in ecobee's right-hand-side portal menu. Then create a new app by clicking 'Create New', enter any name and description you like, then select 'ecobee PIN' as the Authorization Method and click Save. Make note of the API Key, then select 'Create'. [Full instructions at https://www.ecobee.com/home/developer/api/examples/ex1.shtml]")
+        eprint("Go to https://www.ecobee.com/consumerportal/index.html log in, then click on the 'Developer' tab located in ecobee's right-hand-side portal menu. Then create a new app by clicking 'Create New', enter any name and description you like, then select 'ecobee PIN' as the Authorization Method and click Create. Make note of the API Key, then select 'Create'. [Full instructions at https://www.ecobee.com/home/developer/api/examples/ex1.shtml]")
         eprint('If you are reauthenticating an existing app (you already did the step above), go to your ecobee thermostat web page, select the top right menu, and click developer. The API key will be there with the associated name you gave this script.\n')
         api_key = ''
         if sys.version_info[0] > 2:
