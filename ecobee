@@ -313,9 +313,11 @@ class EcobeeThermostat(object):
         if value == -5002:
             return 0
         if self.useCelcius:
-            return ((value * 1.60934)/1000.0)
+            #return ((value * 1.60934)/1000.0)
+            return (value * 1.60934)
         else:
-            return ((value)/1000.0)
+            #return ((value)/1000.0)
+            return (value)
 
 
     def tempType(self):
